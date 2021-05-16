@@ -1,8 +1,10 @@
 import io
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras import preprocessing
 from tensorflow.keras.preprocessing.text import Tokenizer
 
+batch_size = 2
 ctx_len = 4
 d_model = 128
 
@@ -34,5 +36,11 @@ for i in range(len(raw_data) - 1):
                 context.append(0)
     train_x.append(context)
     train_y.append(raw_data[i + 1])
+state = np.random.get_state()
+np.random.shuffle(train_x)
+np.random.set_state(state)
+np.random.shuffle(train_y)
 train_x = tf.cast(train_x, tf.int64)
+train_x = tf.reshape(train_x[:train_x.shape[0] // batch_size * batch_size], (-1, batch_size, ctx_len * seq_len))
 train_y = tf.cast(train_y, tf.int64)
+train_y = tf.reshape(train_y[:train_y.shape[0] // batch_size * batch_size], (-1, batch_size, seq_len))
