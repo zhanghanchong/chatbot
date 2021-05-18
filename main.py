@@ -101,3 +101,10 @@ class MultiHeadAttention(layers.Layer):
         attention_result = tf.transpose(attention_result, perm=[0, 2, 1, 3])
         attention_result = tf.reshape(attention_result, (tf.shape(attention_result)[0], -1, self.d_model))
         return self.dense(attention_result)
+
+
+def feed_forward_network(d_model, dff):
+    return tf.keras.Sequential([
+        layers.Dense(dff, activation='relu'),
+        layers.Dense(d_model)
+    ])
