@@ -9,6 +9,7 @@ config = {'batch_size': 2,
           'd_model': 128,
           'dff': 512,
           'dropout': 0.1,
+          'ln_epsilon': 1e-6,
           'num_head': 8,
           'num_layer': 4}
 dialogue = io.open('./dataset/dialogue.txt', encoding='utf-8').read().split('\n')
@@ -93,18 +94,33 @@ class MultiHeadAttention(layers.Layer):
     def split(self, x):
         return tf.transpose(tf.reshape(x, (tf.shape(x)[0], tf.shape(x)[1], self.num_head, -1)), perm=[0, 2, 1, 3])
 
-    def call(self, q, k, v, mask):
-        q = self.split(self.dense_q(q))
-        k = self.split(self.dense_k(k))
-        v = self.split(self.dense_v(v))
-        attention_result = self_attention(q, k, v, mask)
-        attention_result = tf.transpose(attention_result, perm=[0, 2, 1, 3])
-        attention_result = tf.reshape(attention_result, (tf.shape(attention_result)[0], -1, self.d_model))
-        return self.dense(attention_result)
+    def call(self, q, k, v, mask, training):
+        q = self.split(self.dense_q(q, training=training))
+        k = self.split(self.dense_k(k, training=training))
+        v = self.split(self.dense_v(v, training=training))
+        attention_output = self_attention(q, k, v, mask)
+        attention_output = tf.transpose(attention_output, perm=[0, 2, 1, 3])
+        attention_output = tf.reshape(attention_output, (tf.shape(attention_output)[0], -1, self.d_model))
+        return self.dense(attention_output, training=training)
 
 
-def feed_forward_network(d_model, dff):
-    return tf.keras.Sequential([
-        layers.Dense(dff, activation='relu'),
-        layers.Dense(d_model)
-    ])
+class EncoderLayer(layers.Layer):
+    def __init__(self, d_model, dff, dropout, ln_epsilon, num_head):
+        super(EncoderLayer, self).__init__()
+        self.mha = MultiHeadAttention(d_model, num_head)
+        self.ffn = layers.Dense(dff, activation='relu')
+        self.dense = layers.Dense(d_model)
+        self.dropout1 = layers.Dropout(dropout)
+        self.dropout2 = layers.Dropout(dropout)
+        self.ln1 = layers.LayerNormalization(epsilon=ln_epsilon)
+        self.ln2 = layers.LayerNormalization(epsilon=ln_epsilon)
+
+    def call(self, x, mask, training):
+        mha_output = self.mha(x, x, x, mask, training)
+        dropout1_output = self.dropout1(mha_output, training=training)
+        ln1_output = self.ln1(dropout1_output + x, training=training)
+        ffn_output = self.ffn(ln1_output, training=training)
+        dense_output = self.dense(ffn_output, training=training)
+        dropout2_output = self.dropout2(dense_output, training=training)
+        ln2_output = self.ln2(dropout2_output + ln1_output, training=training)
+        return ln2_output
