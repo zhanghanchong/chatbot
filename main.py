@@ -67,18 +67,19 @@ pe_enc = make_pe(seq_len_enc, config['d_model'])
 pe_dec = make_pe(seq_len_dec, config['d_model'])
 
 
+def make_look_ahead_mask(seq_len):
+    return 1 - tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
+
+
 def make_padding_mask(seq):
     return tf.cast(tf.math.equal(seq, 0), tf.float32)[:, tf.newaxis, :]
 
 
-look_ahead_mask = 1 - tf.linalg.band_part(tf.ones((seq_len_dec, seq_len_dec)), -1, 0)
-
-
 def self_attention(q, k, v, mask):
-    attention_weight = tf.matmul(q, k, transpose_b=True) / tf.math.sqrt(tf.cast(tf.shape(k)[-1], tf.float32))
+    attn_weight = tf.matmul(q, k, transpose_b=True) / tf.math.sqrt(tf.cast(k.shape[-1], tf.float32))
     if mask is not None:
-        attention_weight += mask * -1e9
-    return tf.matmul(tf.nn.softmax(attention_weight, axis=-1), v)
+        attn_weight += mask * -1e9
+    return tf.matmul(tf.nn.softmax(attn_weight, axis=-1), v)
 
 
 class MultiHeadAttention(layers.Layer):
@@ -92,16 +93,16 @@ class MultiHeadAttention(layers.Layer):
         self.dense = layers.Dense(d_model)
 
     def split(self, x):
-        return tf.transpose(tf.reshape(x, (tf.shape(x)[0], tf.shape(x)[1], self.num_head, -1)), perm=[0, 2, 1, 3])
+        return tf.transpose(tf.reshape(x, (x.shape[0], x.shape[1], self.num_head, -1)), perm=[0, 2, 1, 3])
 
     def call(self, q, k, v, mask, training):
         q = self.split(self.dense_q(q, training=training))
         k = self.split(self.dense_k(k, training=training))
         v = self.split(self.dense_v(v, training=training))
-        attention_output = self_attention(q, k, v, mask)
-        attention_output = tf.transpose(attention_output, perm=[0, 2, 1, 3])
-        attention_output = tf.reshape(attention_output, (tf.shape(attention_output)[0], -1, self.d_model))
-        return self.dense(attention_output, training=training)
+        attn_out = self_attention(q, k, v, mask)
+        attn_out = tf.transpose(attn_out, perm=[0, 2, 1, 3])
+        attn_out = tf.reshape(attn_out, (attn_out.shape[0], -1, self.d_model))
+        return self.dense(attn_out, training=training)
 
 
 class EncoderLayer(layers.Layer):
@@ -116,11 +117,39 @@ class EncoderLayer(layers.Layer):
         self.ln2 = layers.LayerNormalization(epsilon=ln_epsilon)
 
     def call(self, x, mask, training):
-        mha_output = self.mha(x, x, x, mask, training)
-        dropout1_output = self.dropout1(mha_output, training=training)
-        ln1_output = self.ln1(dropout1_output + x, training=training)
-        ffn_output = self.ffn(ln1_output, training=training)
-        dense_output = self.dense(ffn_output, training=training)
-        dropout2_output = self.dropout2(dense_output, training=training)
-        ln2_output = self.ln2(dropout2_output + ln1_output, training=training)
-        return ln2_output
+        mha_out = self.mha(x, x, x, mask, training)
+        dropout1_out = self.dropout1(mha_out, training=training)
+        ln1_out = self.ln1(dropout1_out + x, training=training)
+        ffn_out = self.ffn(ln1_out, training=training)
+        dense_out = self.dense(ffn_out, training=training)
+        dropout2_out = self.dropout2(dense_out, training=training)
+        ln2_out = self.ln2(dropout2_out + ln1_out, training=training)
+        return ln2_out
+
+
+class DecoderLayer(layers.Layer):
+    def __init__(self, d_model, dff, dropout, ln_epsilon, num_head):
+        super(DecoderLayer, self).__init__()
+        self.mha1 = MultiHeadAttention(d_model, num_head)
+        self.mha2 = MultiHeadAttention(d_model, num_head)
+        self.ffn = layers.Dense(dff, activation='relu')
+        self.dense = layers.Dense(d_model)
+        self.dropout1 = layers.Dropout(dropout)
+        self.dropout2 = layers.Dropout(dropout)
+        self.dropout3 = layers.Dropout(dropout)
+        self.ln1 = layers.LayerNormalization(epsilon=ln_epsilon)
+        self.ln2 = layers.LayerNormalization(epsilon=ln_epsilon)
+        self.ln3 = layers.LayerNormalization(epsilon=ln_epsilon)
+
+    def call(self, x, enc_out, look_ahead_mask, padding_mask, training):
+        mha1_out = self.mha1(x, x, x, look_ahead_mask, training)
+        dropout1_out = self.dropout1(mha1_out, training=training)
+        ln1_out = self.ln1(dropout1_out + x, training=training)
+        mha2_out = self.mha2(ln1_out, enc_out, enc_out, padding_mask, training)
+        dropout2_out = self.dropout2(mha2_out, training=training)
+        ln2_out = self.ln2(dropout2_out + ln1_out, training=training)
+        ffn_out = self.ffn(ln2_out, training=training)
+        dense_out = self.dense(ffn_out, training=training)
+        dropout3_out = self.dropout3(dense_out, training=training)
+        ln3_out = self.ln3(dropout3_out + ln2_out, training=training)
+        return ln3_out
