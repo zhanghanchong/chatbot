@@ -2,16 +2,21 @@ import io
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
+from tensorflow.keras import optimizers
 from tensorflow.keras import preprocessing
 
-config = {'batch_size': 2,
+config = {'adam_beta_1': 0.9,
+          'adam_beta_2': 0.98,
+          'adam_epsilon': 1e-9,
+          'batch_size': 2,
           'ctx_len': 4,
           'd_model': 128,
           'dff': 512,
           'dropout': 0.1,
           'ln_epsilon': 1e-6,
           'num_head': 8,
-          'num_layer': 4}
+          'num_layer': 4,
+          'warmup': 4000}
 dialogue = io.open('./dataset/dialogue.txt', encoding='utf-8').read().split('\n')
 for i in range(len(dialogue)):
     if len(dialogue[i]) > 0:
@@ -202,3 +207,20 @@ class Transformer(tf.keras.Model):
         enc_out = self.encoder(x_enc, mask, training)
         dec_out = self.decoder(x_dec, enc_out, look_ahead_mask, padding_mask, training)
         return self.dense(dec_out, training=training)
+
+
+transformer = Transformer(config['d_model'], config['dff'], config['dropout'], config['ln_epsilon'], config['num_head'],
+                          config['num_layer'], vocab_size, vocab_size)
+
+
+class Schedule(optimizers.schedules.LearningRateSchedule):
+    def __init__(self, d_model, warmup):
+        self.d_model = tf.cast(d_model, tf.float32)
+        self.warmup = warmup
+
+    def __call__(self, step):
+        return tf.math.rsqrt(self.d_model) * tf.math.minimum(tf.math.rsqrt(step), step * (self.warmup ** -1.5))
+
+
+optimizer = optimizers.Adam(Schedule(config['d_model'], config['warmup']), config['adam_beta_1'], config['adam_beta_2'],
+                            config['adam_epsilon'])
