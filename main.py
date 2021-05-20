@@ -15,6 +15,7 @@ config = {'adam_beta_1': 0.9,
           'd_model': 128,
           'dff': 512,
           'dropout': 0.1,
+          'epoch': 1,
           'ln_epsilon': 1e-6,
           'num_head': 8,
           'num_layer': 4,
@@ -61,6 +62,7 @@ def make_batch(train_data, batch_size):
 
 train_x = make_batch(train_x, config['batch_size'])
 train_y = make_batch(train_y, config['batch_size'])
+batch_num = train_x.shape[0]
 
 
 def make_pe(position, d_model):
@@ -94,13 +96,14 @@ class MultiHeadAttention(layers.Layer):
         super(MultiHeadAttention, self).__init__()
         self.d_model = d_model
         self.num_head = num_head
+        self.depth = d_model // num_head
         self.dense_q = layers.Dense(d_model)
         self.dense_k = layers.Dense(d_model)
         self.dense_v = layers.Dense(d_model)
         self.dense = layers.Dense(d_model)
 
     def split(self, x):
-        return tf.transpose(tf.reshape(x, (x.shape[0], x.shape[1], self.num_head, -1)), perm=[0, 2, 1, 3])
+        return tf.transpose(tf.reshape(x, (-1, x.shape[1], self.num_head, self.depth)), perm=[0, 2, 1, 3])
 
     def call(self, q, k, v, mask, training):
         q = self.split(self.dense_q(q, training=training))
@@ -108,7 +111,7 @@ class MultiHeadAttention(layers.Layer):
         v = self.split(self.dense_v(v, training=training))
         attn_out = self_attention(q, k, v, mask)
         attn_out = tf.transpose(attn_out, perm=[0, 2, 1, 3])
-        attn_out = tf.reshape(attn_out, (attn_out.shape[0], -1, self.d_model))
+        attn_out = tf.reshape(attn_out, (-1, attn_out.shape[1], self.d_model))
         return self.dense(attn_out, training=training)
 
 
@@ -249,3 +252,38 @@ ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
 ckpt_manager = tf.train.CheckpointManager(ckpt, './checkpoints', max_to_keep=5)
 if ckpt_manager.latest_checkpoint:
     ckpt.restore(ckpt_manager.latest_checkpoint)
+train_step_signature = [
+    tf.TensorSpec(shape=(None, seq_len_enc), dtype=tf.int64),
+    tf.TensorSpec(shape=(None, seq_len_dec + 1), dtype=tf.int64)
+]
+
+
+@tf.function(input_signature=train_step_signature)
+def train_step(x_enc, x_dec):
+    x_dec_in = x_dec[:, :-1]
+    x_dec_out = x_dec[:, 1:]
+    mask = make_padding_mask(x_enc)
+    combined_mask = tf.maximum(make_look_ahead_mask(seq_len_dec), make_padding_mask(x_dec_in))
+    with tf.GradientTape() as tape:
+        pred = transformer(x_enc, x_dec_in, mask, combined_mask, mask, True)
+        loss = loss_function(x_dec_out, pred)
+    grad = tape.gradient(loss, transformer.trainable_variables)
+    optimizer.apply_gradients(zip(grad, transformer.trainable_variables))
+    train_loss(loss)
+    train_accuracy(accuracy_function(x_dec_out, pred))
+
+
+for i in range(config['epoch']):
+    train_loss.reset_states()
+    train_accuracy.reset_states()
+    for j in range(batch_num):
+        train_step(train_x[j], train_y[j])
+        print(f'Epoch {i + 1} Batch {j} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
+    if (i + 1) % 5 == 0:
+        ckpt_manager.save()
+    print(f'Epoch {i + 1} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
+while 1:
+    sentence = input()
+    sentence = ['<start> ' + ' '.join(sentence) + ' <end>']
+    data_x = preprocessing.sequence.pad_sequences(tokenizer.texts_to_sequences(sentence), maxlen=seq_len_enc,
+                                                  padding='post')
