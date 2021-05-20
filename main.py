@@ -72,7 +72,7 @@ def make_look_ahead_mask(seq_len):
 
 
 def make_padding_mask(seq):
-    return tf.cast(tf.math.equal(seq, 0), tf.float32)[:, tf.newaxis, :]
+    return tf.cast(tf.math.equal(seq, 0), tf.float32)[:, tf.newaxis, tf.newaxis, :]
 
 
 def self_attention(q, k, v, mask):
@@ -189,3 +189,16 @@ class Decoder(layers.Layer):
         for k in range(self.num_layer):
             x = self.dec_layers[k](x, enc_out, look_ahead_mask, padding_mask, training)
         return x
+
+
+class Transformer(tf.keras.Model):
+    def __init__(self, d_model, dff, dropout, ln_epsilon, num_head, num_layer, vocab_size_enc, vocab_size_dec):
+        super(Transformer, self).__init__()
+        self.encoder = Encoder(d_model, dff, dropout, ln_epsilon, num_head, num_layer, pe_enc, vocab_size_enc)
+        self.decoder = Decoder(d_model, dff, dropout, ln_epsilon, num_head, num_layer, pe_dec, vocab_size_dec)
+        self.dense = layers.Dense(vocab_size_dec)
+
+    def call(self, x_enc, x_dec, mask, look_ahead_mask, padding_mask, training):
+        enc_out = self.encoder(x_enc, mask, training)
+        dec_out = self.decoder(x_dec, enc_out, look_ahead_mask, padding_mask, training)
+        return self.dense(dec_out, training=training)
