@@ -171,3 +171,21 @@ class Encoder(layers.Layer):
         for k in range(self.num_layer):
             x = self.enc_layers[k](x, mask, training)
         return x
+
+
+class Decoder(layers.Layer):
+    def __init__(self, d_model, dff, dropout, ln_epsilon, num_head, num_layer, pe, vocab_size_dec):
+        super(Decoder, self).__init__()
+        self.d_model = d_model
+        self.num_layer = num_layer
+        self.pe = pe
+        self.embedding = layers.Embedding(vocab_size_dec, d_model)
+        self.dec_layers = [DecoderLayer(d_model, dff, dropout, ln_epsilon, num_head) for _ in range(num_layer)]
+        self.dropout = layers.Dropout(dropout)
+
+    def call(self, x, enc_out, look_ahead_mask, padding_mask, training):
+        x = self.embedding(x, training=training) * tf.math.sqrt(tf.cast(self.d_model, tf.float32)) + self.pe
+        x = self.dropout(x, training=training)
+        for k in range(self.num_layer):
+            x = self.dec_layers[k](x, enc_out, look_ahead_mask, padding_mask, training)
+        return x
