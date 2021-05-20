@@ -245,3 +245,7 @@ def accuracy_function(real, pred):
 
 train_loss = metrics.Mean(name='train_loss')
 train_accuracy = metrics.Mean(name='train_accuracy')
+ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
+ckpt_manager = tf.train.CheckpointManager(ckpt, './checkpoints', max_to_keep=5)
+if ckpt_manager.latest_checkpoint:
+    ckpt.restore(ckpt_manager.latest_checkpoint)
