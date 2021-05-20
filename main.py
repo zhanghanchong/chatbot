@@ -2,6 +2,8 @@ import io
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
+from tensorflow.keras import losses
+from tensorflow.keras import metrics
 from tensorflow.keras import optimizers
 from tensorflow.keras import preprocessing
 
@@ -222,5 +224,24 @@ class Schedule(optimizers.schedules.LearningRateSchedule):
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(tf.math.rsqrt(step), step * (self.warmup ** -1.5))
 
 
-optimizer = optimizers.Adam(Schedule(config['d_model'], config['warmup']), config['adam_beta_1'], config['adam_beta_2'],
-                            config['adam_epsilon'])
+optimizer = optimizers.Adam(Schedule(config['d_model'], config['warmup']), beta_1=config['adam_beta_1'],
+                            beta_2=config['adam_beta_2'], epsilon=config['adam_epsilon'])
+loss_object = losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
+
+
+def loss_function(real, pred):
+    loss = loss_object(real, pred)
+    mask = tf.cast(tf.math.logical_not(tf.math.equal(real, 0)), loss.dtype)
+    return tf.reduce_sum(loss * mask) / tf.reduce_sum(mask)
+
+
+def accuracy_function(real, pred):
+    accuracy = tf.equal(real, tf.argmax(pred, axis=2))
+    mask = tf.math.logical_not(tf.math.equal(real, 0))
+    accuracy = tf.cast(tf.math.logical_and(accuracy, mask), tf.float32)
+    mask = tf.cast(mask, tf.float32)
+    return tf.reduce_sum(accuracy) / tf.reduce_sum(mask)
+
+
+train_loss = metrics.Mean(name='train_loss')
+train_accuracy = metrics.Mean(name='train_accuracy')
