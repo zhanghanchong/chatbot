@@ -12,10 +12,10 @@ config = {'adam_beta_1': 0.9,
           'adam_epsilon': 1e-9,
           'batch_size': 2,
           'ctx_len': 4,
-          'd_model': 128,
-          'dff': 512,
+          'd_model': 512,
+          'dff': 2048,
           'dropout': 0.1,
-          'epoch': 1,
+          'epoch': 128,
           'ln_epsilon': 1e-6,
           'num_head': 8,
           'num_layer': 4,
@@ -26,6 +26,8 @@ for i in range(len(dialogue)):
         dialogue[i] = '<start> ' + ' '.join(dialogue[i]) + ' <end>'
 tokenizer = preprocessing.text.Tokenizer(filters='')
 tokenizer.fit_on_texts(dialogue)
+start_token = tokenizer.word_index['<start>']
+end_token = tokenizer.word_index['<end>']
 vocab_size = len(tokenizer.word_index) + 1
 raw_data = preprocessing.sequence.pad_sequences(tokenizer.texts_to_sequences(dialogue), padding='post')
 seq_len_enc = config['ctx_len'] * raw_data.shape[1]
@@ -282,8 +284,28 @@ for i in range(config['epoch']):
     if (i + 1) % 5 == 0:
         ckpt_manager.save()
     print(f'Epoch {i + 1} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
+test_x = np.zeros((1, seq_len_enc), np.int64)
 while 1:
+    test_x[0][seq_len_dec + 1:] = test_x[0][:-(seq_len_dec + 1)]
     sentence = input()
     sentence = ['<start> ' + ' '.join(sentence) + ' <end>']
-    data_x = preprocessing.sequence.pad_sequences(tokenizer.texts_to_sequences(sentence), maxlen=seq_len_enc,
-                                                  padding='post')
+    test_x[0][:seq_len_dec + 1] = preprocessing.sequence.pad_sequences(tokenizer.texts_to_sequences(sentence),
+                                                                       maxlen=seq_len_dec + 1, padding='post')
+    test_y = np.zeros((1, seq_len_dec + 1), np.int64)
+    test_y[0][0] = start_token
+    mask_test = make_padding_mask(test_x)
+    for i in range(seq_len_dec):
+        test_y_in = test_y[:, :-1]
+        combined_mask_test = tf.maximum(make_look_ahead_mask(seq_len_dec), make_padding_mask(test_y_in))
+        pred_test = transformer(test_x, test_y_in, mask_test, combined_mask_test, mask_test, False)
+        pred_test = pred_test[0][i]
+        test_y[0][i + 1] = tf.argmax(pred_test, axis=-1)
+        if test_y[0][i + 1] == end_token:
+            break
+    for i in range(seq_len_dec):
+        if test_y[0][i + 1] == end_token:
+            break
+        print(tokenizer.index_word[test_y[0][i + 1]], end='')
+    print()
+    test_x[0][seq_len_dec + 1:] = test_x[0][:-(seq_len_dec + 1)]
+    test_x[0][:seq_len_dec + 1] = test_y[0]
